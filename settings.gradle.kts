@@ -22,3 +22,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "pdf-manager-android"
 include(":app")
+include(":pdf")
