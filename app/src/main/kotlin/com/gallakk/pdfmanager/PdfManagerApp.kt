@@ -1,7 +1,5 @@
 package com.gallakk.pdfmanager
 
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -13,9 +11,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import com.gallakk.pdfmanager.ui.compress.CompressScreen
+import com.gallakk.pdfmanager.ui.merge.MergeScreen
+import com.gallakk.pdfmanager.ui.split.SplitScreen
 
 enum class Screen(val labelRes: Int) {
     Merge(R.string.merge_tab),
@@ -41,9 +41,11 @@ fun PdfManagerApp() {
                 }
             },
         ) { padding ->
-            // Écrans réels ajoutés dans les PR suivantes.
-            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                Text(stringResource(current.labelRes))
+            val content = Modifier.padding(padding)
+            when (current) {
+                Screen.Merge -> MergeScreen(content)
+                Screen.Split -> SplitScreen(content)
+                Screen.Compress -> CompressScreen(content)
             }
         }
     }
