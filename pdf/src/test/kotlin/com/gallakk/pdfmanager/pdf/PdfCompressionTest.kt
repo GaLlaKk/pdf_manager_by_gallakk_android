@@ -110,7 +110,11 @@ class PdfCompressionTest {
         PDDocument().use { doc ->
             val page = PDPage(PDRectangle(300f, 300f))
             doc.addPage(page)
-            val data = ByteArray(pixels * pixels * 3).also { java.util.Random(1).nextBytes(it) }
+            val raw = ByteArray(pixels * pixels * 3).also { java.util.Random(1).nextBytes(it) }
+            // Le flux est fourni déjà encodé en Flate.
+            val data = java.io.ByteArrayOutputStream().also { out ->
+                java.util.zip.DeflaterOutputStream(out).use { it.write(raw) }
+            }.toByteArray()
             val image = PDImageXObject(
                 doc, ByteArrayInputStream(data), COSName.FLATE_DECODE, pixels, pixels, 8, PDDeviceRGB.INSTANCE,
             )
