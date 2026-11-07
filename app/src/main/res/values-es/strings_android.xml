@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Chaînes propres à l'application Android (non générées par export_android_strings.py). -->
+<resources>
+    <string name="cancel">Cancelar</string>
+    <string name="compress_larger_notice">El archivo comprimido es más grande que el original.</string>
+</resources>
