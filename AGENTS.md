@@ -1,7 +1,7 @@
 # Guide du projet pour les agents
 
 > Modèle à copier à la racine du nouveau dépôt Android sous le nom `AGENTS.md`,
-> avec `SPECIFICATION.md` (dans `docs/`) et le dossier `res/`.
+> avec `SPECIFICATION.md` (dans `docs/`) ; `res/` est dans `app/src/main/res/`.
 
 ## Objectif
 
@@ -52,12 +52,13 @@ premier. Le dépôt de référence (Python) fait foi pour la logique PDF :
 
 ## Développement et validation
 
-À compléter dès la création du projet Gradle, par exemple :
-
 ```bash
-./gradlew lintDebug testDebugUnitTest
+./gradlew lintDebug testDebugUnitTest verifyNoInternetPermission
 ./gradlew assembleDebug
 ```
+
+`verifyNoInternetPermission` échoue si `INTERNET` apparaît dans le manifeste
+fusionné. Les chaînes se trouvent dans `app/src/main/res/values*/strings.xml`.
 
 JDK 17+ et Android Studio (ou SDK en ligne de commande) requis. Toute
 modification de la logique PDF s'accompagne d'un test de parité avec les cas
