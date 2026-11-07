@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Chaînes propres à l'application Android (non générées par export_android_strings.py). -->
+<resources>
+    <string name="cancel">취소</string>
+    <string name="compress_larger_notice">압축된 파일이 원본보다 큽니다.</string>
+</resources>
