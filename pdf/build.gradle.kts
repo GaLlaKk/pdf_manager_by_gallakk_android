@@ -15,7 +15,10 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
 
-    testOptions { unitTests.isReturnDefaultValues = true }
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+        unitTests.isIncludeAndroidResources = true
+    }
 }
 
 dependencies {
@@ -23,5 +26,6 @@ dependencies {
     implementation(libs.pdfbox.android)
 
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
     testImplementation(libs.kotlinx.coroutines.test)
 }

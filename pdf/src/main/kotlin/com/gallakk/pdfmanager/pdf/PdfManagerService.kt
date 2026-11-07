@@ -1,7 +1,11 @@
 package com.gallakk.pdfmanager.pdf
 
+import com.tom_roush.pdfbox.cos.COSArray
+import com.tom_roush.pdfbox.cos.COSName
+import com.tom_roush.pdfbox.cos.COSStream
 import com.tom_roush.pdfbox.io.MemoryUsageSetting
 import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.pdmodel.graphics.image.PDImageXObject
 import java.io.File
 import java.io.FileNotFoundException
 import java.nio.file.Files
@@ -115,6 +119,65 @@ object PdfManagerService {
             }
         }
         return destination
+    }
+
+    /** Compresse [pdfFile] vers [output] (distinct de la source) selon [mode]. */
+    suspend fun compressPdf(
+        pdfFile: File,
+        output: File,
+        mode: CompressionMode = CompressionMode.LOSSLESS,
+        onProgress: ProgressListener = { _, _ -> },
+    ): CompressionResult {
+        require(isPdfFile(pdfFile)) { "The PDF file is missing or invalid: $pdfFile" }
+        val destination = validateOutput(pdfFile, output)
+        writeAtomically(destination, ".pdf-compress-") { temporary ->
+            PDDocument.load(pdfFile, memorySetting()).use { document ->
+                val total = document.numberOfPages
+                val replaced = HashMap<COSStream, PDImageXObject?>()
+                document.pages.forEachIndexed { index, page ->
+                    coroutineContext.ensureActive()
+                    deflateContentStreams(page.cosObject.getDictionaryObject(COSName.CONTENTS))
+                    if (mode == CompressionMode.BALANCED) recompressImages(document, page, replaced)
+                    onProgress(index + 1, total)
+                }
+                coroutineContext.ensureActive()
+                document.save(temporary)
+            }
+        }
+        return CompressionResult(destination, pdfFile.length(), destination.length())
+    }
+
+    private fun recompressImages(
+        document: PDDocument,
+        page: com.tom_roush.pdfbox.pdmodel.PDPage,
+        replaced: MutableMap<COSStream, PDImageXObject?>,
+    ) {
+        val scanner = ImageDpiScanner()
+        scanner.processPage(page)
+        val resources = page.resources ?: return
+        for (name in resources.xObjectNames.toList()) {
+            val image = resources.getXObject(name) as? PDImageXObject ?: continue
+            val dpi = scanner.dpiOf(image)
+            if (!ImageRecompressor.isCandidate(image, dpi)) continue
+            val replacement = if (replaced.containsKey(image.cosObject)) {
+                replaced[image.cosObject]
+            } else {
+                ImageRecompressor.recompress(document, image, dpi).also { replaced[image.cosObject] = it }
+            }
+            if (replacement != null) resources.put(name, replacement)
+        }
+    }
+
+    /** Compresse (Flate) les flux de contenu non filtrés. */
+    private fun deflateContentStreams(contents: com.tom_roush.pdfbox.cos.COSBase?) {
+        when (contents) {
+            is COSStream -> if (contents.filters == null) {
+                val data = contents.createInputStream().use { it.readBytes() }
+                contents.createOutputStream(COSName.FLATE_DECODE).use { it.write(data) }
+            }
+            is COSArray -> for (i in 0 until contents.size()) deflateContentStreams(contents.getObject(i))
+            else -> Unit
+        }
     }
 
     internal fun validateOutput(source: File, output: File): File {
