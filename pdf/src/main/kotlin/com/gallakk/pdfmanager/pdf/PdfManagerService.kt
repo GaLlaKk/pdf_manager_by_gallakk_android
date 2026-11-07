@@ -5,13 +5,18 @@ import com.tom_roush.pdfbox.cos.COSName
 import com.tom_roush.pdfbox.cos.COSStream
 import com.tom_roush.pdfbox.io.MemoryUsageSetting
 import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.pdmodel.PDPage
+import com.tom_roush.pdfbox.pdmodel.PDResources
+import com.tom_roush.pdfbox.pdmodel.graphics.form.PDFormXObject
 import com.tom_roush.pdfbox.pdmodel.graphics.image.PDImageXObject
 import java.io.File
 import java.io.FileNotFoundException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 
 /** Rotations temporaires : fichier -> (index de page 0-based -> delta en degrés). */
 typealias PageRotations = Map<File, Map<Int, Int>>
@@ -127,45 +132,65 @@ object PdfManagerService {
         output: File,
         mode: CompressionMode = CompressionMode.LOSSLESS,
         onProgress: ProgressListener = { _, _ -> },
-    ): CompressionResult {
+    ): CompressionResult = withContext(Dispatchers.IO) {
         require(isPdfFile(pdfFile)) { "The PDF file is missing or invalid: $pdfFile" }
         val destination = validateOutput(pdfFile, output)
         writeAtomically(destination, ".pdf-compress-") { temporary ->
             PDDocument.load(pdfFile, memorySetting()).use { document ->
-                val total = document.numberOfPages
+                val pages = document.pages.toList()
+                val total = pages.size
+                val scanner = if (mode == CompressionMode.BALANCED) {
+                    ImageDpiScanner().also { dpiScanner -> pages.forEach(dpiScanner::processPage) }
+                } else {
+                    null
+                }
                 val replaced = HashMap<COSStream, PDImageXObject?>()
-                document.pages.forEachIndexed { index, page ->
+                val visitedForms = HashSet<COSStream>()
+                pages.forEachIndexed { index, page ->
                     coroutineContext.ensureActive()
                     deflateContentStreams(page.cosObject.getDictionaryObject(COSName.CONTENTS))
-                    if (mode == CompressionMode.BALANCED) recompressImages(document, page, replaced)
+                    if (scanner != null) {
+                        recompressImages(document, page, scanner, replaced, visitedForms)
+                    }
                     onProgress(index + 1, total)
                 }
                 coroutineContext.ensureActive()
                 document.save(temporary)
+                coroutineContext.ensureActive()
             }
         }
-        return CompressionResult(destination, pdfFile.length(), destination.length())
+        CompressionResult(destination, pdfFile.length(), destination.length())
     }
 
     private fun recompressImages(
         document: PDDocument,
-        page: com.tom_roush.pdfbox.pdmodel.PDPage,
+        page: PDPage,
+        scanner: ImageDpiScanner,
         replaced: MutableMap<COSStream, PDImageXObject?>,
+        visitedForms: MutableSet<COSStream>,
     ) {
-        val scanner = ImageDpiScanner()
-        scanner.processPage(page)
-        val resources = page.resources ?: return
-        for (name in resources.xObjectNames.toList()) {
-            val image = resources.getXObject(name) as? PDImageXObject ?: continue
-            val dpi = scanner.dpiOf(image)
-            if (!ImageRecompressor.isCandidate(image, dpi)) continue
-            val replacement = if (replaced.containsKey(image.cosObject)) {
-                replaced[image.cosObject]
-            } else {
-                ImageRecompressor.recompress(document, image, dpi).also { replaced[image.cosObject] = it }
+        fun recompressResources(resources: PDResources?) {
+            if (resources == null) return
+            for (name in resources.xObjectNames.toList()) {
+                when (val xObject = resources.getXObject(name)) {
+                    is PDImageXObject -> {
+                        val dpi = scanner.dpiOf(xObject)
+                        if (!ImageRecompressor.isCandidate(xObject, dpi)) continue
+                        val replacement = if (replaced.containsKey(xObject.cosObject)) {
+                            replaced[xObject.cosObject]
+                        } else {
+                            ImageRecompressor.recompress(document, xObject, dpi)
+                                .also { replaced[xObject.cosObject] = it }
+                        }
+                        if (replacement != null) resources.put(name, replacement)
+                    }
+                    is PDFormXObject -> {
+                        if (visitedForms.add(xObject.cosObject)) recompressResources(xObject.resources)
+                    }
+                }
             }
-            if (replacement != null) resources.put(name, replacement)
         }
+        recompressResources(page.resources)
     }
 
     /** Compresse (Flate) les flux de contenu non filtrés. */

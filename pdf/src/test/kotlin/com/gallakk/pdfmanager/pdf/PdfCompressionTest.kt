@@ -1,11 +1,15 @@
 package com.gallakk.pdfmanager.pdf
 
+import com.tom_roush.pdfbox.cos.COSArray
 import com.tom_roush.pdfbox.cos.COSName
 import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.pdmodel.PDFormContentStream
 import com.tom_roush.pdfbox.pdmodel.PDPage
 import com.tom_roush.pdfbox.pdmodel.PDPageContentStream
+import com.tom_roush.pdfbox.pdmodel.PDResources
 import com.tom_roush.pdfbox.pdmodel.common.PDRectangle
 import com.tom_roush.pdfbox.pdmodel.graphics.color.PDDeviceRGB
+import com.tom_roush.pdfbox.pdmodel.graphics.form.PDFormXObject
 import com.tom_roush.pdfbox.pdmodel.graphics.image.PDImageXObject
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -105,7 +109,13 @@ class PdfCompressionTest {
     }
 
     /** Image RGB de [pixels] px affichée sur 144 pt (2 pouces), soit pixels/2 dpi. */
-    private fun createImagePdf(name: String, pixels: Int): File {
+    private fun createImagePdf(
+        name: String,
+        pixels: Int,
+        displayWidth: Float = 144f,
+        displayHeight: Float = 144f,
+        additionalPlacements: List<Pair<Float, Float>> = emptyList(),
+    ): File {
         val file = File(tmp.root, name)
         PDDocument().use { doc ->
             val page = PDPage(PDRectangle(300f, 300f))
@@ -118,7 +128,56 @@ class PdfCompressionTest {
             val image = PDImageXObject(
                 doc, ByteArrayInputStream(data), COSName.FLATE_DECODE, pixels, pixels, 8, PDDeviceRGB.INSTANCE,
             )
-            PDPageContentStream(doc, page).use { it.drawImage(image, 10f, 10f, 144f, 144f) }
+            PDPageContentStream(doc, page).use { stream ->
+                stream.drawImage(image, 10f, 10f, displayWidth, displayHeight)
+                additionalPlacements.forEachIndexed { index, (width, height) ->
+                    stream.drawImage(image, 10f + (index + 1) * 90f, 10f, width, height)
+                }
+            }
+            doc.save(file)
+        }
+        return file
+    }
+
+    private fun createFormImagePdf(name: String, pixels: Int): File {
+        val file = File(tmp.root, name)
+        PDDocument().use { doc ->
+            val imageData = ByteArray(pixels * pixels * 3).also { java.util.Random(1).nextBytes(it) }
+            val compressedData = java.io.ByteArrayOutputStream().also { output ->
+                java.util.zip.DeflaterOutputStream(output).use { it.write(imageData) }
+            }.toByteArray()
+            val image = PDImageXObject(
+                doc, ByteArrayInputStream(compressedData), COSName.FLATE_DECODE, pixels, pixels, 8,
+                PDDeviceRGB.INSTANCE,
+            )
+            val form = PDFormXObject(doc).apply {
+                bBox = PDRectangle(300f, 300f)
+                resources = PDResources()
+            }
+            PDFormContentStream(form).use { it.drawImage(image, 10f, 10f, 144f, 144f) }
+            val page = PDPage(PDRectangle(300f, 300f))
+            doc.addPage(page)
+            PDPageContentStream(doc, page).use { it.drawForm(form) }
+            doc.save(file)
+        }
+        return file
+    }
+
+    private fun createMultiPageSharedImagePdf(name: String, pixels: Int): File {
+        val file = File(tmp.root, name)
+        PDDocument().use { doc ->
+            val raw = ByteArray(pixels * pixels * 3).also { java.util.Random(1).nextBytes(it) }
+            val data = java.io.ByteArrayOutputStream().also { output ->
+                java.util.zip.DeflaterOutputStream(output).use { it.write(raw) }
+            }.toByteArray()
+            val image = PDImageXObject(
+                doc, ByteArrayInputStream(data), COSName.FLATE_DECODE, pixels, pixels, 8, PDDeviceRGB.INSTANCE,
+            )
+            listOf(72f, 144f).forEach { size ->
+                val page = PDPage(PDRectangle(300f, 300f))
+                doc.addPage(page)
+                PDPageContentStream(doc, page).use { it.drawImage(image, 10f, 10f, size, size) }
+            }
             doc.save(file)
         }
         return file
@@ -154,6 +213,80 @@ class PdfCompressionTest {
         val out = File(tmp.root, "balanced.pdf")
         PdfManagerService.compressPdf(pdf, out, CompressionMode.BALANCED)
         assertEquals(300, firstImageWidth(out))
+    }
+
+    @Test
+    fun balancedPreservesImageWhenOneAxisIsBelowThreshold() = runBlocking {
+        val pdf = createImagePdf("img.pdf", 600, displayWidth = 144f, displayHeight = 288f)
+        val out = File(tmp.root, "balanced.pdf")
+        PdfManagerService.compressPdf(pdf, out, CompressionMode.BALANCED)
+        assertEquals(600, firstImageWidth(out))
+    }
+
+    @Test
+    fun balancedUsesLowestResolutionAcrossSharedImagePlacements() = runBlocking {
+        val pdf = createImagePdf(
+            "img.pdf", 600, displayWidth = 72f, displayHeight = 72f,
+            additionalPlacements = listOf(144f to 144f),
+        )
+        val out = File(tmp.root, "balanced.pdf")
+        PdfManagerService.compressPdf(pdf, out, CompressionMode.BALANCED)
+        assertEquals(300, firstImageWidth(out))
+    }
+
+    @Test
+    fun balancedUsesLowestResolutionAcrossPages() = runBlocking {
+        val pdf = createMultiPageSharedImagePdf("img.pdf", 600)
+        val out = File(tmp.root, "balanced.pdf")
+        PdfManagerService.compressPdf(pdf, out, CompressionMode.BALANCED)
+        PDDocument.load(out).use { doc ->
+            doc.pages.forEach { page ->
+                val image = page.resources
+                    .getXObject(page.resources.xObjectNames.first()) as PDImageXObject
+                assertEquals(300, image.width)
+            }
+        }
+    }
+
+    @Test
+    fun balancedRecompressesImagesInFormResources() = runBlocking {
+        val pdf = createFormImagePdf("form.pdf", 600)
+        val out = File(tmp.root, "balanced.pdf")
+        PdfManagerService.compressPdf(pdf, out, CompressionMode.BALANCED)
+        PDDocument.load(out).use { doc ->
+            val form = doc.getPage(0).resources
+                .getXObject(doc.getPage(0).resources.xObjectNames.first()) as PDFormXObject
+            val image = form.resources
+                .getXObject(form.resources.xObjectNames.first()) as PDImageXObject
+            assertEquals(300, image.width)
+        }
+    }
+
+    @Test
+    fun recompressorSkipsBitonalAndColorMaskedImages() {
+        val pdf = createImagePdf("img.pdf", 600)
+        PDDocument.load(pdf).use { doc ->
+            val image = doc.getPage(0).resources
+                .getXObject(doc.getPage(0).resources.xObjectNames.first()) as PDImageXObject
+            image.cosObject.setInt(COSName.BITS_PER_COMPONENT, 1)
+            assertFalse(ImageRecompressor.isCandidate(image, 300f))
+            image.cosObject.setInt(COSName.BITS_PER_COMPONENT, 8)
+            image.cosObject.setItem(COSName.MASK, COSArray())
+            assertFalse(ImageRecompressor.isCandidate(image, 300f))
+        }
+    }
+
+    @Test
+    fun compressionRunsProgressCallbacksOffCallingThread() = runBlocking {
+        val pdf = createVerbosePdf("doc.pdf")
+        val callerThread = Thread.currentThread()
+        var progressThread: Thread? = null
+        PdfManagerService.compressPdf(
+            pdf, File(tmp.root, "compressed.pdf"), onProgress = { _, _ ->
+                progressThread = Thread.currentThread()
+            },
+        )
+        assertTrue(progressThread !== callerThread)
     }
 
     @Test

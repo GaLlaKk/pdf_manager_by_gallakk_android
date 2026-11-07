@@ -15,9 +15,9 @@ import com.tom_roush.pdfbox.pdmodel.graphics.form.PDFormXObject
 import com.tom_roush.pdfbox.pdmodel.graphics.image.PDImageXObject
 import kotlin.math.hypot
 
-/** Estime la résolution effective maximale de chaque image d'une page à partir de la CTM. */
+/** Estime la résolution effective minimale de chaque image à partir de toutes ses utilisations. */
 internal class ImageDpiScanner : PDFStreamEngine() {
-    private val maxDpi = HashMap<COSStream, Float>()
+    private val minDpi = HashMap<COSStream, Float>()
 
     init {
         addOperator(Concatenate())
@@ -28,7 +28,7 @@ internal class ImageDpiScanner : PDFStreamEngine() {
         addOperator(SetMatrix())
     }
 
-    fun dpiOf(image: PDImageXObject): Float = maxDpi[image.cosObject] ?: 0f
+    fun dpiOf(image: PDImageXObject): Float = minDpi[image.cosObject] ?: 0f
 
     override fun processOperator(operator: Operator, operands: List<COSBase>) {
         if (operator.name != "Do") {
@@ -40,9 +40,12 @@ internal class ImageDpiScanner : PDFStreamEngine() {
             is PDImageXObject -> {
                 val ctm = graphicsState.currentTransformationMatrix
                 val widthPoints = hypot(ctm.scaleX, ctm.shearY)
-                if (widthPoints > 0f) {
-                    val dpi = xObject.width / (widthPoints / 72f)
-                    maxDpi.merge(xObject.cosObject, dpi) { a, b -> maxOf(a, b) }
+                val heightPoints = hypot(ctm.shearX, ctm.scaleY)
+                if (widthPoints > 0f && heightPoints > 0f) {
+                    val dpiX = xObject.width * 72f / widthPoints
+                    val dpiY = xObject.height * 72f / heightPoints
+                    val dpi = minOf(dpiX, dpiY)
+                    minDpi.merge(xObject.cosObject, dpi) { a, b -> minOf(a, b) }
                 }
             }
             is PDFormXObject -> showForm(xObject)

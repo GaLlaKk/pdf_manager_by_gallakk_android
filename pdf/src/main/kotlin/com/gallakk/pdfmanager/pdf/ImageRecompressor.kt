@@ -1,6 +1,7 @@
 package com.gallakk.pdfmanager.pdf
 
 import android.graphics.Bitmap
+import com.tom_roush.pdfbox.cos.COSName
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.graphics.image.JPEGFactory
 import com.tom_roush.pdfbox.pdmodel.graphics.image.PDImageXObject
@@ -15,8 +16,10 @@ internal object ImageRecompressor {
     fun isCandidate(image: PDImageXObject, dpi: Float): Boolean =
         dpi > CompressionMode.DPI_THRESHOLD &&
             !image.isStencil &&
+            image.bitsPerComponent > 1 &&
             image.mask == null &&
-            image.softMask == null
+            image.softMask == null &&
+            !image.cosObject.containsKey(COSName.MASK)
 
     /** Retourne la nouvelle image, ou null si elle n'est pas plus petite que l'originale. */
     fun recompress(document: PDDocument, image: PDImageXObject, dpi: Float): PDImageXObject? {
